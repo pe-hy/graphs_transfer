@@ -1,0 +1,89 @@
+# Do not touch:
+
+defaults:  
+  - _self_  
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: disabled  
+  
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .
+
+convert_hf:
+  in_path: "temp/${model.name}"
+  out_path: "temp/hf_${model.name}"
+
+# Touch anything below here instead:
+
+wandb:
+  # Name your model
+  model_name: "Pythia-${model.n_layer}l-${model.n_head}h-${model.n_embd}d-${optim.lr_type}-___INSERT-NAME-HERE___" 
+  # And your project
+  proj_name: "None"
+  num_examples_reported: 100
+
+
+data:
+  # No need to change.
+  datapath: data
+  train_file: "data/train.json"
+  test_file: "data/test.json" # NOTE: validation set uses same data as test set
+  num_workers: 32
+
+  # Tokenizer - No need to change.
+  tokenizer_path: "tokenizer/tokenizer.json"
+
+  # No need to change.
+  split_str: "[OUT]"
+
+  # If you want to subsample sets:
+  sampling:
+    # Set to True if you want to subsample your sets.
+    sample_train_set: False
+    sample_test_set: False
+    sample_val_set: False
+
+    # This only applies if the above vars are set to True, otherwise uses all the data!!!
+    num_train: 512880
+    num_val: 1024
+    num_test: 1024
+
+  # If you want to filter data (use utils/filter_data.py), otherwise unused.
+  filter:
+    max_token_length: None  # Maximum token length for filtering examples
+  
+model:
+  name: ${wandb.model_name}
+
+  batch_size: 512
+  accumulate_grad_batches: 1
+  block_size: 1024
+  epochs: 100
+
+  n_layer: 12
+  n_head: 8
+  n_embd: 256
+
+optim:
+  lr_type: "linear-reg" # options: linear or linear-reg, 
+                        # otherwise cosine decay (lr_type: None)
+  lr: 2e-4              # learning rate
+  warmup_steps: 10      
+  weight_decay: 0.01    # only for linear-reg / linear
+  n_steps: ${model.epochs}
+
+eval:
+  num_examples: 512
+  batch_size: 512
+  results_dir: "data/eval_results/${model.name}"
+
+inference:
+  modelpath: "temp/hf_${model.name}" # Default: uses checkpoint of model.name
+  datapath: ${data.datapath}/inference_data/ # Reads ALL json files from this directory
+  batch_size: 512
+
+  # If you want to subsample test set for inference:
+  sampling:
+    sample_test_set: False
+    num_test: 512
