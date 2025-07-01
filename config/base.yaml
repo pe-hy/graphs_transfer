@@ -72,7 +72,7 @@ optim:
   lr_type: None # options: linear or linear-reg, 
                     # otherwise cosine decay (lr_type: None)
   lr: 0.003         # learning rate (used for cosine schedule)
-  warmup_steps: 150
+  warmup_steps: 1560
   # n_steps: ${model.epochs}
   weight_decay: 0.01
   max_lr: 0.002
