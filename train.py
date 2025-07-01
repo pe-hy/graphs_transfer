@@ -18,7 +18,10 @@ import json
 import os
 import wandb
 import numpy as np
+import pickle
+import networkx as nx
 from transformers import get_cosine_schedule_with_warmup
+from typing import Optional
 
 import logging
 
@@ -28,8 +31,20 @@ logging.basicConfig(
 logging.info("Starting training...")
 
 
+def load_graph(graph_path: str) -> nx.Graph:
+    """Load the NetworkX graph from pickle file."""
+    try:
+        with open(graph_path, 'rb') as f:
+            graph = pickle.load(f)
+        logging.info(f"Loaded graph with {graph.number_of_nodes()} nodes and {graph.number_of_edges()} edges")
+        return graph
+    except Exception as e:
+        logging.error(f"Failed to load graph from {graph_path}: {e}")
+        raise
+
+
 class LitLLM(L.LightningModule):
-    def __init__(self, cfg, model, preprocessor, train_batches, delimiter_token_id, trainer_ckpt_path=None):
+    def __init__(self, cfg, model, preprocessor, train_batches, delimiter_token_id, graph, data_format, trainer_ckpt_path=None):
         super().__init__()
 
         self.llm = model
@@ -38,6 +53,8 @@ class LitLLM(L.LightningModule):
         self.trainer_ckpt_path = trainer_ckpt_path
         self.train_batches = train_batches
         self.delimiter_token_id = delimiter_token_id
+        self.graph = graph
+        self.data_format = data_format
         _, self.hf_conf = hf_config.get_configs(cfg)
 
     def setup(self, stage):
@@ -121,6 +138,8 @@ class LitLLM(L.LightningModule):
             self.cfg.data.split_str,
             self.global_step,
             self.llm.model,
+            self.graph,  # Pass the graph
+            self.data_format  # Pass the data format
         )
         
         # Get metrics dictionary from evaluator
@@ -138,7 +157,7 @@ class LitLLM(L.LightningModule):
         
         if wandb.run is not None and hasattr(evaluator, 'predictions_after_delimiter'):
             # Create example table
-            examples_table = wandb.Table(columns=["Prompt", "Prediction", "Ground Truth", "Exact Match"])
+            examples_table = wandb.Table(columns=["Prompt", "Prediction", "Ground Truth", "Exact Match", "Valid Path"])
             
             # Select a few random indices to log
             num_examples = min(self.cfg.wandb.num_examples_reported, len(evaluator.prompts))
@@ -150,7 +169,12 @@ class LitLLM(L.LightningModule):
                 gt = evaluator.gts[i]
                 exact_match = pred == gt
                 
-                examples_table.add_data(prompt, pred, gt, exact_match)
+                # Get path validity if available
+                valid_path = False
+                if hasattr(evaluator, 'path_validities') and i < len(evaluator.path_validities):
+                    valid_path = evaluator.path_validities[i]
+                
+                examples_table.add_data(prompt, pred, gt, exact_match, valid_path)
             
             wandb.log({"evaluation_examples": examples_table}, step=self.global_step)
 
@@ -175,17 +199,33 @@ class LitLLM(L.LightningModule):
             )
             return [optimizer], [scheduler]
         else:
-            n_steps = self.cfg.optim.n_steps
+            n_steps = self.cfg.model.epochs * self.train_batches
             warmup_steps = self.cfg.optim.warmup_steps
 
-            optimizer = torch.optim.AdamW(self.parameters(), lr=self.cfg.optim.lr)
+            optimizer = torch.optim.AdamW(
+                self.llm.model.parameters(), lr=self.cfg.optim.lr, weight_decay=self.cfg.optim.weight_decay, betas=(0.9, 0.95)
+            )
+            
+            # Warmup scheduler
+            warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=1e-6, total_iters=warmup_steps
+            )
+            
+            # Cosine scheduler with minimum at 0.5 * initial_lr
+            cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=n_steps - warmup_steps, eta_min=self.cfg.optim.lr * 0.3
+            )
+            
+            # Combine them
+            combined_scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, 
+                schedulers=[warmup_scheduler, cosine_scheduler],
+                milestones=[warmup_steps]
+            )
+            
             scheduler = {
-                "scheduler": get_cosine_schedule_with_warmup(
-                    optimizer,
-                    num_warmup_steps=warmup_steps,
-                    num_training_steps=n_steps,
-                ),
-                "interval": "epoch",
+                "scheduler": combined_scheduler,
+                "interval": "step",
             }
             return [optimizer], [scheduler]
 
@@ -201,6 +241,7 @@ class LitLLM(L.LightningModule):
     version_base=None,
 )
 def main(cfg: DictConfig):
+    L.seed_everything(42, workers=True)
     conf, _ = hf_config.get_configs(cfg)
 
     wandb_config = OmegaConf.to_container(cfg, resolve=True)
@@ -215,6 +256,14 @@ def main(cfg: DictConfig):
     accumulate_grad_batches = cfg.model.accumulate_grad_batches
     num_workers = cfg.data.num_workers
 
+    # Load the graph
+    graph_path = cfg.data.get("graph_path", "data/graph.pkl")
+    graph = load_graph(graph_path)
+    
+    # Get data format from config (should be "standard", "indices", or "grammar")
+    data_format = cfg.data.get("format", "standard")
+    print(f"Using data format: {data_format}")
+
     tokenizer = get_tokenizer(cfg)
     preprocessor = Preprocessor(
         tokenizer, device="cuda" if torch.cuda.is_available() else "cpu"
@@ -228,10 +277,16 @@ def main(cfg: DictConfig):
 
     train_size = len(data.train_dataloader())
     trace_start_token_id = tokenizer.encode(cfg.data.split_str, add_special_tokens=True)[0]
-    # print(trace_start_token_id)
 
-    lit_model = LitLLM(model=model, cfg=cfg, train_batches=train_size, preprocessor=preprocessor,
-                       delimiter_token_id=trace_start_token_id)
+    lit_model = LitLLM(
+        model=model, 
+        cfg=cfg, 
+        train_batches=train_size, 
+        preprocessor=preprocessor,
+        delimiter_token_id=trace_start_token_id,
+        graph=graph,
+        data_format=data_format
+    )
 
     logger = WandbLogger(
         project=cfg.wandb.proj_name, name=f"{cfg.model.name}", config=wandb_config

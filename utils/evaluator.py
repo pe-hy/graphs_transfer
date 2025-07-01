@@ -10,6 +10,8 @@ import torch
 import numpy as np
 import wandb
 import pandas as pd
+import networkx as nx
+import re
 from datetime import datetime
 from tqdm import trange
 from pathlib import Path
@@ -19,6 +21,7 @@ from litgpt.utils import copy_config_files, auto_download_checkpoint
 import torch
 from pathlib import Path
 from datetime import datetime
+from typing import List, Tuple, Dict, Any, Optional
 
 
 def convert_litgpt_to_hf(cfg):
@@ -44,8 +47,189 @@ def convert_litgpt_to_hf(cfg):
     return hf_model
 
 
+class PathParser:
+    """Utility class to parse model outputs based on data format."""
+    
+    def __init__(self, data_format: str):
+        self.data_format = data_format.lower()
+        
+    def parse_input(self, input_text: str) -> Tuple[Optional[int], Optional[int]]:
+        """Parse input to extract start and end nodes."""
+        try:
+            # Input format: "ST : start_node , end_node"
+            match = re.search(r'ST\s*:\s*(\d+)\s*,\s*(\d+)', input_text)
+            if match:
+                start_node = int(match.group(1))
+                end_node = int(match.group(2))
+                
+                # Convert back from indices format if needed
+                if self.data_format == "indices":
+                    start_node -= 10000
+                    end_node -= 10000
+                    
+                return start_node, end_node
+            return None, None
+        except:
+            return None, None
+    
+    def parse_output(self, output_text: str) -> Optional[List[int]]:
+        """Parse model output to extract the path."""
+        try:
+            # Remove " : END" suffix if present
+            output_text = output_text.strip()
+            if output_text.endswith(": END"):
+                output_text = output_text[:-6].strip()
+            elif output_text.endswith(":END"):
+                output_text = output_text[:-4].strip()
+            
+            if self.data_format == "standard" or self.data_format == "indices":
+                return self._parse_standard_output(output_text)
+            elif self.data_format == "grammar":
+                return self._parse_grammar_output(output_text)
+            else:
+                raise ValueError(f"Unknown data format: {self.data_format}")
+                
+        except Exception as e:
+            print(f"Error parsing output '{output_text}': {e}")
+            return None
+    
+    def _parse_standard_output(self, output_text: str) -> Optional[List[int]]:
+        """Parse standard/indices format: "node1 , node2 , node3" """
+        try:
+            if not output_text.strip():
+                return []
+            
+            # Split by comma and extract numbers
+            parts = output_text.split(',')
+            path = []
+            
+            for part in parts:
+                part = part.strip()
+                if part:
+                    # Extract number from the part
+                    numbers = re.findall(r'\d+', part)
+                    if numbers:
+                        node = int(numbers[0])
+                        # Convert back from indices format if needed
+                        if self.data_format == "indices":
+                            node -= 10000
+                        path.append(node)
+            
+            return path if path else None
+        except:
+            return None
+    
+    def _parse_grammar_output(self, output_text: str) -> Optional[List[int]]:
+        """Parse grammar format: "( node1 , node2 ) , ( node2 , node3 )" """
+        try:
+            if not output_text.strip():
+                return []
+            
+            # Find all pairs in parentheses
+            pairs = re.findall(r'\(\s*(\d+)\s*,\s*(\d+)\s*\)', output_text)
+            
+            if not pairs:
+                return None
+            
+            # Reconstruct path from pairs
+            path = [int(pairs[0][0])]  # Start with first node of first pair
+            
+            for i, (node1, node2) in enumerate(pairs):
+                node1, node2 = int(node1), int(node2)
+                
+                # Check consistency: each pair should connect
+                if i > 0 and node1 != path[-1]:
+                    print(f"Inconsistent grammar path: expected {path[-1]}, got {node1}")
+                    return None
+                
+                path.append(node2)
+            
+            return path
+        except Exception as e:
+            print(f"Error parsing grammar output: {e}")
+            return None
+
+
+class PathValidator:
+    """Utility class to validate paths using the graph."""
+    
+    def __init__(self, graph: nx.Graph):
+        self.graph = graph
+    
+    def validate_path(self, start_node: int, end_node: int, path: List[int]) -> Dict[str, Any]:
+        """
+        Validate a path and return detailed validation results.
+        
+        Returns:
+            Dict with validation metrics:
+            - is_valid: bool - overall validity
+            - correct_endpoints: bool - path starts and ends correctly
+            - valid_edges: bool - all edges in path exist in graph
+            - is_shortest: bool - path is a shortest path
+            - path_length: int - length of the path
+            - shortest_length: int - length of shortest path
+        """
+        result = {
+            "is_valid": False,
+            "correct_endpoints": False,
+            "valid_edges": False,
+            "is_shortest": False,
+            "path_length": len(path) if path else 0,
+            "shortest_length": 0,
+            "error": None
+        }
+        
+        if not path:
+            result["error"] = "Empty path"
+            return result
+        
+        try:
+            # Check if all nodes are in the graph
+            for node in path:
+                if node not in self.graph:
+                    result["error"] = f"Node {node} not in graph"
+                    return result
+            
+            # Check endpoints
+            if path[0] == start_node and path[-1] == end_node:
+                result["correct_endpoints"] = True
+            else:
+                result["error"] = f"Wrong endpoints: path goes from {path[0]} to {path[-1]}, expected {start_node} to {end_node}"
+                return result
+            
+            # Check if all edges exist
+            valid_edges = True
+            for i in range(len(path) - 1):
+                if not self.graph.has_edge(path[i], path[i + 1]):
+                    result["error"] = f"Edge ({path[i]}, {path[i + 1]}) does not exist in graph"
+                    valid_edges = False
+                    break
+            
+            result["valid_edges"] = valid_edges
+            if not valid_edges:
+                return result
+            
+            # Check if it's a shortest path
+            try:
+                shortest_path = nx.shortest_path(self.graph, start_node, end_node)
+                result["shortest_length"] = len(shortest_path)
+                result["is_shortest"] = len(path) == len(shortest_path)
+                
+                if result["correct_endpoints"] and result["valid_edges"]:
+                    result["is_valid"] = True
+                    
+            except nx.NetworkXNoPath:
+                result["error"] = f"No path exists between {start_node} and {end_node}"
+                return result
+                
+        except Exception as e:
+            result["error"] = f"Validation error: {str(e)}"
+        
+        return result
+
+
 class Evaluator:
-    def __init__(self, config, test_set, tokenizer, split_str, step=None, model=None):
+    def __init__(self, config, test_set, tokenizer, split_str, step=None, model=None, graph=None, data_format="standard"):
         self.config = config
         self.num_examples = config.eval.num_examples
         self.batch_size = config.eval.batch_size
@@ -57,11 +241,19 @@ class Evaluator:
         self.test_set = test_set
         self.step = step
         self.split_str = split_str
+        self.graph = graph
+        self.data_format = data_format
+        
+        # Initialize parser and validator
+        self.parser = PathParser(data_format)
+        self.validator = PathValidator(graph) if graph is not None else None
+        
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.prompts, self.gts = self.get_prompts()
         self.full_predictions = None
         self.predictions_after_delimiter = None
+        self.path_validities = None
 
     def get_prompts(self):
         search_token_id = self.tokenizer.encode(self.split_str, add_special_tokens=False)[0]
@@ -91,8 +283,6 @@ class Evaluator:
             # Ground truth is everything AFTER the delimiter up to EOS
             gt_ids = input_ids[split_index+1:end_index]
             gt = self.tokenizer.decode(gt_ids, skip_special_tokens=True)
-            # print("FULL_PROMPT: ", full_prompt, "\n\n")
-            # print("GT: ", gt, "\n\n")
 
             # Re-encode with BOS token
             prompt_with_bos = self.tokenizer.encode(
@@ -121,7 +311,6 @@ class Evaluator:
             tokenizer.padding_side = "left"
             inputs = tokenizer(batch_text, return_tensors="pt", padding=True).to("cuda")
             input_prompt = inputs["input_ids"]
-            # print("INPUT PROMPT: ", input_prompt, "\n\n")
 
             outputs = self.hf_model.generate(
                 input_ids=input_prompt,
@@ -147,9 +336,7 @@ class Evaluator:
                     # Get just the part after the delimiter
                     after_delimiter = tokenizer.decode(output_ids[split_index+1:end_index], skip_special_tokens=True)
                     
-                    # print("AFTER DELIMITER: ", after_delimiter, "\n\n")
                 except ValueError:
-                    # print(f"Warning: Could not find delimiter or EOS in generated output")
                     full_text = tokenizer.decode(output_ids, skip_special_tokens=False)
                     after_delimiter = ""
                 
@@ -158,8 +345,65 @@ class Evaluator:
 
         return output_texts_concat, predictions_after_delimiter
 
+    def validate_predictions(self, predictions: List[str]) -> Tuple[List[bool], Dict[str, float]]:
+        """Validate all predictions and return validity flags and metrics."""
+        if self.validator is None:
+            print("Warning: No graph provided, cannot validate paths")
+            return [False] * len(predictions), {}
+        
+        validities = []
+        validation_results = []
+        
+        for i, (prediction, prompt_ids) in enumerate(zip(predictions, self.prompts)):
+            # Parse the input prompt to get start and end nodes
+            prompt_text = self.tokenizer.decode(prompt_ids, skip_special_tokens=True)
+            start_node, end_node = self.parser.parse_input(prompt_text)
+            
+            if start_node is None or end_node is None:
+                validities.append(False)
+                validation_results.append({"error": "Could not parse input"})
+                continue
+            
+            # Parse the predicted path
+            predicted_path = self.parser.parse_output(prediction)
+            
+            if predicted_path is None:
+                validities.append(False)
+                validation_results.append({"error": "Could not parse prediction"})
+                continue
+            
+            # Validate the path
+            validation_result = self.validator.validate_path(start_node, end_node, predicted_path)
+            validities.append(validation_result["is_valid"])
+            validation_results.append(validation_result)
+        
+        # Calculate aggregate metrics
+        if validation_results:
+            total_valid = sum(validities)
+            total_predictions = len(validities)
+            
+            correct_endpoints = sum(1 for r in validation_results if r.get("correct_endpoints", False))
+            valid_edges = sum(1 for r in validation_results if r.get("valid_edges", False))
+            shortest_paths = sum(1 for r in validation_results if r.get("is_shortest", False))
+            
+            path_lengths = [r.get("path_length", 0) for r in validation_results if r.get("path_length", 0) > 0]
+            shortest_lengths = [r.get("shortest_length", 0) for r in validation_results if r.get("shortest_length", 0) > 0]
+            
+            validation_metrics = {
+                "path_validity_rate": total_valid / total_predictions if total_predictions > 0 else 0.0,
+                "correct_endpoints_rate": correct_endpoints / total_predictions if total_predictions > 0 else 0.0,
+                "valid_edges_rate": valid_edges / total_predictions if total_predictions > 0 else 0.0,
+                "shortest_path_rate": shortest_paths / total_predictions if total_predictions > 0 else 0.0,
+                "avg_predicted_path_length": np.mean(path_lengths) if path_lengths else 0.0,
+                "avg_shortest_path_length": np.mean(shortest_lengths) if shortest_lengths else 0.0,
+            }
+        else:
+            validation_metrics = {}
+        
+        return validities, validation_metrics
+
     def calculate_metrics(self, predictions, gts):
-        """Calculate token-level and exact match accuracy"""
+        """Calculate token-level and exact match accuracy plus path validation metrics"""
         token_accuracies = []
         exact_matches = []
         
@@ -182,12 +426,19 @@ class Evaluator:
             exact_match = 1.0 if pred == gt else 0.0
             exact_matches.append(exact_match)
         
-        metrics = {
+        base_metrics = {
             "token_full_accuracy": np.mean(token_accuracies),
             "exact_match_accuracy": np.mean(exact_matches)
         }
         
-        return metrics
+        # Add path validation metrics
+        validities, validation_metrics = self.validate_predictions(predictions)
+        self.path_validities = validities  # Store for later use
+        
+        # Combine all metrics
+        all_metrics = {**base_metrics, **validation_metrics}
+        
+        return all_metrics
 
     def save(self, full_predictions, predictions_after_delimiter, gts, metrics=None):
         eval_dir = os.path.join(self.config.eval.results_dir, f"step_{self.step}")
@@ -197,11 +448,15 @@ class Evaluator:
         results = {
             "full_predictions": full_predictions,
             "predictions_after_delimiter": predictions_after_delimiter,
-            "ground_truths": gts
+            "ground_truths": gts,
+            "data_format": self.data_format
         }
         
         if metrics:
             results["metrics"] = metrics
+            
+        if hasattr(self, 'path_validities') and self.path_validities:
+            results["path_validities"] = self.path_validities
             
         with open(results_file, "w") as f:
             json.dump(results, f, indent=4)
@@ -214,11 +469,12 @@ class Evaluator:
         self.full_predictions = full_preds
         self.predictions_after_delimiter = preds_after_delimiter
         
-        # Calculate metrics
+        # Calculate metrics (including path validation)
         metrics = self.calculate_metrics(preds_after_delimiter, self.gts)
         
         # Print metrics
-        print("\nEvaluation Metrics:")
+        print(f"\nEvaluation Metrics (Data Format: {self.data_format}):")
+        print("-" * 50)
         for metric, value in metrics.items():
             print(f"{metric}: {value:.4f}")
         

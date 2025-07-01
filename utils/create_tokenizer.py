@@ -71,6 +71,8 @@ def create_tokenizer(vocab: Set[str], cfg: DictConfig) -> Tokenizer:
     return tokenizer
 
 
+import glob
+
 def get_vocab(cfg: DictConfig) -> Set[str]:
     """
     Build vocabulary from training and validation files.
@@ -81,14 +83,17 @@ def get_vocab(cfg: DictConfig) -> Set[str]:
     Returns:
         Set of unique tokens for vocabulary.
     """
-    train_data = _load_json_file(cfg.data.train_file)
-    val_data = _load_json_file(cfg.data.test_file)
-    
-    combined_data = train_data + val_data
+    data_files = glob.glob("data/standard_8k/*.json") + glob.glob("data/grammar_8k/*.json") + glob.glob("data/indices_8k/*.json")
+        
+    all_data = []
+    for file_path in data_files:
+        with open(file_path, "r") as f:
+            file_data = json.load(f)
+            all_data.extend(file_data)
     
     # Extract both input and output text from the new data format
     all_text = []
-    for item in combined_data:
+    for item in all_data:
         all_text.append(item["input"])
         all_text.append(item["output"])
     

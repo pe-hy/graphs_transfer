@@ -18,18 +18,21 @@ convert_hf:
 
 wandb:
   # Name your model
-  model_name: "Pythia-${model.n_layer}l-${model.n_head}h-${model.n_embd}d-${optim.lr_type}-___INSERT-NAME-HERE___" 
+  model_name: "Pythia-${model.n_layer}l-${model.n_head}h-${model.n_embd}d-${optim.lr_type}-graph_${data.format}_${graph_path}_100N" 
   # And your project
-  proj_name: "None"
+  proj_name: "graph_transfer"
   num_examples_reported: 100
 
 
 data:
   # No need to change.
   datapath: data
-  train_file: "data/train.json"
-  test_file: "data/test.json" # NOTE: validation set uses same data as test set
+  train_file: "data/${data.format}_1k/train.json"
+  test_file: "data/${data.format}_1k/test.json" # NOTE: validation set uses same data as test set
   num_workers: 32
+
+  graph_path: "data/graph_1024.pkl"
+  format: "grammar"  # or "indices" or "grammar"
 
   # Tokenizer - No need to change.
   tokenizer_path: "tokenizer/tokenizer.json"
@@ -56,22 +59,23 @@ data:
 model:
   name: ${wandb.model_name}
 
-  batch_size: 512
+  batch_size: 32
   accumulate_grad_batches: 1
-  block_size: 1024
-  epochs: 100
+  block_size: 128
+  epochs: 200
 
-  n_layer: 12
-  n_head: 8
-  n_embd: 256
+  n_layer: 6
+  n_head: 4
+  n_embd: 32
 
 optim:
-  lr_type: "linear-reg" # options: linear or linear-reg, 
-                        # otherwise cosine decay (lr_type: None)
-  lr: 2e-4              # learning rate
-  warmup_steps: 10      
-  weight_decay: 0.01    # only for linear-reg / linear
-  n_steps: ${model.epochs}
+  lr_type: None # options: linear or linear-reg, 
+                    # otherwise cosine decay (lr_type: None)
+  lr: 0.003         # learning rate (used for cosine schedule)
+  warmup_steps: 150
+  # n_steps: ${model.epochs}
+  weight_decay: 0.01
+  max_lr: 0.002
 
 eval:
   num_examples: 512
