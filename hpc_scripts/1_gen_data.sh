@@ -15,4 +15,4 @@
 
 singularity exec \
     $SIF \
-    python data_generation/generate_data.py
+    python data_generation/gen_graphs.py
