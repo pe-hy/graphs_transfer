@@ -304,11 +304,11 @@ def generate_shortest_paths_dataset(
     os.makedirs(output_base_dir, exist_ok=True)
     
     # Generate graph
-    # G = generate_graph(n_nodes, connectivity)
-    G = load_graph(input_base_dir)
+    G = generate_graph(n_nodes, connectivity)
+    # G = load_graph(input_base_dir)
     
     # Save the graph for later use
-    # graph_path = save_graph(G, output_base_dir)
+    graph_path = save_graph(G, output_base_dir)
     
     # Generate all shortest paths
     all_paths_dict = generate_all_shortest_paths(G, n_nodes)

@@ -1,18 +1,81 @@
 #!/bin/bash
-#SBATCH --job-name=gen_data                          # Job name
-#SBATCH --output=logs/gen_data/gen_data_%j.out       # Standard output and error log (%j expands to jobID)
-#SBATCH --error=logs/gen_data/gen_data_%j.err        # Error log
-#SBATCH --time=01:00:00                              # Time limit hrs:min:sec
+#SBATCH --job-name=gen_mixed                          # Job name
+#SBATCH --output=logs/gen_mixed/gen_mixed_%j.out      # Standard output and error log (%j expands to jobID)
+#SBATCH --error=logs/gen_mixed/gen_mixed_%j.err       # Error log
+#SBATCH --time=02:00:00                               # Time limit hrs:min:sec
 #SBATCH --account=project_465001424
-#SBATCH --nodes=1                                    # Number of nodes requested
-#SBATCH --ntasks=1                                   # Number of tasks (processes)
-#SBATCH --gpus=1                                     # Number of GPUs requested
-#SBATCH --cpus-per-task=16                           # Number of CPU cores per task
-#SBATCH --mem=64GB                                   # Memory limit
-#SBATCH --partition=small-g                          # Partition name
+#SBATCH --nodes=1                                     # Number of nodes requested
+#SBATCH --ntasks=1                                    # Number of tasks (processes)
+#SBATCH --gpus=1                                      # Number of GPUs requested
+#SBATCH --cpus-per-task=16                            # Number of CPU cores per task
+#SBATCH --mem=64GB                                    # Memory limit
+#SBATCH --partition=small-g                           # Partition name
 
-# export SINGULARITY_BIND="$SINGULARITY_BIND,/usr/bin/sacct,/usr/bin/sacctmgr,/usr/bin/salloc,/usr/bin/sattach,/usr/bin/sbatch,/usr/bin/sbcast,/usr/bin/scancel,/usr/bin/scontrol,/usr/bin/scrontab,/usr/bin/sdiag,/usr/bin/sinfo,/usr/bin/sprio,/usr/bin/squeue,/usr/bin/sreport,/usr/bin/srun,/usr/bin/sshare,/usr/bin/sstat,/usr/bin/strigger,/usr/bin/sview,/usr/bin/sgather,/usr/lib64/slurm/,/etc/slurm,/etc/passwd,/usr/lib64/libmunge.so.2,/run/munge,/var/lib/misc,/etc/nsswitch.conf"
+# Common parameters for all format combinations
+TRAIN_FORMAT1=2048
+TRAIN_FORMAT2=256
+TEST_FORMAT1=1024
+TEST_FORMAT2=1024
+GRAPH_PATH="data/graph.pkl"
+SEED=42
 
-singularity exec \
-    $SIF \
-    python data_generation/gen_graphs.py
+# Format combinations (format1 format2)
+COMBINATIONS=(
+    "standard indices"
+    "standard grammar"
+    "standard grammar_indices"
+    "indices standard"
+    "indices grammar"
+    "indices grammar_indices"
+    "grammar standard"
+    "grammar indices"
+    "grammar grammar_indices"
+    "grammar_indices standard"
+    "grammar_indices indices"
+    "grammar_indices grammar"
+)
+
+echo "Starting mixed format data generation..."
+echo "Common parameters:"
+echo "  Train format1: $TRAIN_FORMAT1"
+echo "  Train format2: $TRAIN_FORMAT2"
+echo "  Test format1: $TEST_FORMAT1"
+echo "  Test format2: $TEST_FORMAT2"
+echo "  Graph path: $GRAPH_PATH"
+echo "  Seed: $SEED"
+echo ""
+
+# Loop through all format combinations
+for combination in "${COMBINATIONS[@]}"; do
+    # Split the combination into format1 and format2
+    read -r format1 format2 <<< "$combination"
+    
+    echo "Processing combination: $format1 + $format2"
+    
+    # Create output directory name
+    output_dir="data/256/mixed_${format1}_${format2}"
+    
+    singularity exec \
+        $SIF \
+        python data_generation/gen_mix.py \
+        --format1 "$format1" \
+        --format2 "$format2" \
+        --train_format1 $TRAIN_FORMAT1 \
+        --train_format2 $TRAIN_FORMAT2 \
+        --test_format1 $TEST_FORMAT1 \
+        --test_format2 $TEST_FORMAT2 \
+        --graph_path "$GRAPH_PATH" \
+        --output_dir "$output_dir" \
+        --seed $SEED
+    
+    echo "Completed: $format1 + $format2"
+    echo ""
+done
+
+echo "All mixed format combinations generated!"
+echo ""
+echo "Generated directories:"
+for combination in "${COMBINATIONS[@]}"; do
+    read -r format1 format2 <<< "$combination"
+    echo "  data/mixed_${format1}_${format2}/"
+done
