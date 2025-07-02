@@ -79,6 +79,15 @@ def save_graph(G: nx.Graph, output_base_dir: str):
     print(f"Graph saved to {graph_path}")
     return graph_path
 
+def load_graph(input_base_dir: str):
+    """Load graph from path."""
+    graph_path = os.path.join(input_base_dir, "graph.pkl")
+    with open(graph_path, 'rb') as f:
+        graph = pickle.load(f)
+    print(f"Graph loaded from {graph_path}")
+    return graph
+
+
 def format_standard(start_node: int, end_node: int, path: List[int]) -> Dict[str, str]:
     """Format data in standard variant."""
     input_str = f"ST : {start_node} , {end_node}"
@@ -272,6 +281,7 @@ def generate_shortest_paths_dataset(
     test_samples: int,
     connectivity: str = "medium",
     output_base_dir: str = "data",
+    input_base_dir: str = "data",
     oversample_train: bool = True
 ):
     """
@@ -294,10 +304,11 @@ def generate_shortest_paths_dataset(
     os.makedirs(output_base_dir, exist_ok=True)
     
     # Generate graph
-    G = generate_graph(n_nodes, connectivity)
+    # G = generate_graph(n_nodes, connectivity)
+    G = load_graph(input_base_dir)
     
     # Save the graph for later use
-    graph_path = save_graph(G, output_base_dir)
+    # graph_path = save_graph(G, output_base_dir)
     
     # Generate all shortest paths
     all_paths_dict = generate_all_shortest_paths(G, n_nodes)
@@ -331,9 +342,10 @@ def generate_shortest_paths_dataset(
         print(f"\nProcessing {variant_name} variant...")
         
         # Create directory for this variant
-        variant_dir = f"{output_base_dir}/{variant_name}_{train_samples // 1000}k"
-        if oversample_train:
-            variant_dir += f"_oversampled_{train_target_size}"
+        if (train_samples // 1000) > 0:
+            variant_dir = f"{output_base_dir}/{variant_name}_{train_samples // 1000}k"
+        else:
+            variant_dir = f"{output_base_dir}/{variant_name}_{train_samples}_samples"
         os.makedirs(variant_dir, exist_ok=True)
         
         # Format train data (unique examples)
@@ -382,7 +394,7 @@ if __name__ == "__main__":
     
     # Parameters
     N_NODES = 100
-    TRAIN_SAMPLES = 1024  # Number of unique training samples per variant # 512 1024 2048 4096 8192
+    TRAIN_SAMPLES = 32  # Number of unique training samples per variant # 512 1024 2048 4096 8192
     TEST_SAMPLES = 1024   # Number of testing samples per variant
     CONNECTIVITY = "medium"  # Options: "low", "medium", "high"
     OVERSAMPLE_TRAIN = True  # Oversample training data to N×N examples
