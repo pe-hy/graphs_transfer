@@ -18,7 +18,7 @@ convert_hf:
 
 wandb:
   # Name your model
-  model_name: "Pythia-${model.n_layer}l-${model.n_head}h-${model.n_embd}d-${optim.lr_type}-graph_${data.format}_${graph_path}_100N" 
+  model_name: "Pythia-${model.n_layer}l-${model.n_head}h-${model.n_embd}d-${optim.lr_type}-graph_${data.format}_${data.num_samples}_100N" 
   # And your project
   proj_name: "graph_transfer"
   num_examples_reported: 100
@@ -27,12 +27,14 @@ wandb:
 data:
   # No need to change.
   datapath: data
-  train_file: "data/${data.format}_1k/train.json"
-  test_file: "data/${data.format}_1k/test.json" # NOTE: validation set uses same data as test set
+  train_file: "data/${data.format}_${data.samples_k}_samples/train.json"
+  test_file: "data/${data.format}_${data.samples_k}_samples/test.json" # NOTE: validation set uses same data as test set
   num_workers: 32
 
-  graph_path: "data/graph_1024.pkl"
-  format: "grammar"  # or "indices" or "grammar"
+  num_samples: 32
+  samples_k: 32 # This needs to be num_samples // 1000 or if below 1000 samples then the actual number of samples (ex. 4096 = 4, 256 = 256)
+  graph_path: "data/graph.pkl"
+  format: "standard"  # or "indices" or "grammar" or "standard"
 
   # Tokenizer - No need to change.
   tokenizer_path: "tokenizer/tokenizer.json"
@@ -59,14 +61,14 @@ data:
 model:
   name: ${wandb.model_name}
 
-  batch_size: 32
+  batch_size: 64
   accumulate_grad_batches: 1
   block_size: 128
   epochs: 200
 
   n_layer: 6
   n_head: 4
-  n_embd: 32
+  n_embd: 64
 
 optim:
   lr_type: None # options: linear or linear-reg, 
