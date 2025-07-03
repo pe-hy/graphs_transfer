@@ -13,7 +13,7 @@
 
 # Common parameters for all format combinations
 TRAIN_FORMAT1=2048
-TRAIN_FORMAT2=256
+TRAIN_FORMAT2=512
 TEST_FORMAT1=1024
 TEST_FORMAT2=1024
 GRAPH_PATH="data/graph.pkl"
@@ -53,7 +53,7 @@ for combination in "${COMBINATIONS[@]}"; do
     echo "Processing combination: $format1 + $format2"
     
     # Create output directory name
-    output_dir="data/256/mixed_${format1}_${format2}"
+    output_dir="data/512/mixed_${format1}_${format2}"
     
     singularity exec \
         $SIF \

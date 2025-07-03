@@ -9,7 +9,7 @@ from datasets import load_dataset
 from omegaconf import DictConfig, OmegaConf
 from transformers import PreTrainedTokenizerFast
 from hydra.utils import get_original_cwd, to_absolute_path
-from typing import Optional, Union
+from typing import Optional, Union, List
 from litgpt.tokenizer import Tokenizer
 from collections import defaultdict
 import os
@@ -30,6 +30,11 @@ class Datamodule(LightningDataModule):
         self.train_dataset = self.dataset["train"]
         self.val_dataset = self.dataset["val"]
         self.test_dataset = self.dataset["test"]
+        # Handle multiple test datasets
+        if "test_main" in self.dataset:
+            self.test_main_dataset = self.dataset["test_main"]
+        if "test_second" in self.dataset:
+            self.test_second_dataset = self.dataset["test_second"]
 
     def connect(self, max_seq_length: Optional[int] = None) -> None:
         self.max_seq_length = -1 if max_seq_length is None else max_seq_length
@@ -65,22 +70,54 @@ class Datamodule(LightningDataModule):
         )
 
 
-def get_data(cfg: DictConfig, tokenizer, for_info=False):
+def get_data(cfg: DictConfig, tokenizer, for_info=False, test_files: Optional[List[str]] = None):
+    """
+    Load data with support for multiple test files.
+    
+    Args:
+        cfg: Configuration
+        tokenizer: Tokenizer
+        for_info: Whether this is for data info (affects max_length)
+        test_files: Optional list of test files [test_main_path, test_second_path]
+    """
     train_file = to_absolute_path(cfg.data.train_file)
-    test_file = to_absolute_path(cfg.data.test_file)
-
-    hf_dataset = load_dataset(
-        "json",
-        data_files={
-            "train": train_file,
-            "val": test_file,
-            "test": test_file,
-        },
-    )
+    
+    # Handle multiple test files or single test file
+    if test_files is not None and len(test_files) >= 2:
+        test_main_file = to_absolute_path(test_files[0])
+        test_second_file = to_absolute_path(test_files[1])
+        
+        hf_dataset = load_dataset(
+            "json",
+            data_files={
+                "train": train_file,
+                "val": test_main_file,  # Use first test file for validation
+                "test": test_main_file,  # Keep backward compatibility
+                "test_main": test_main_file,
+                "test_second": test_second_file,
+            },
+        )
+    else:
+        # Fallback to original behavior
+        test_file = to_absolute_path(cfg.data.test_file)
+        hf_dataset = load_dataset(
+            "json",
+            data_files={
+                "train": train_file,
+                "val": test_file,
+                "test": test_file,
+            },
+        )
+    
+    # Apply sampling if configured
     if cfg.data.sampling.sample_train_set:
         hf_dataset["train"] = hf_dataset["train"].select(range(int(cfg.data.sampling.num_train)))
     if cfg.data.sampling.sample_test_set:
         hf_dataset["test"] = hf_dataset["test"].select(range(int(cfg.data.sampling.num_test)))
+        if "test_main" in hf_dataset:
+            hf_dataset["test_main"] = hf_dataset["test_main"].select(range(int(cfg.data.sampling.num_test)))
+        if "test_second" in hf_dataset:
+            hf_dataset["test_second"] = hf_dataset["test_second"].select(range(int(cfg.data.sampling.num_test)))
     if cfg.data.sampling.sample_val_set:
         hf_dataset["val"] = hf_dataset["val"].select(range(int(cfg.data.sampling.num_val)))
 

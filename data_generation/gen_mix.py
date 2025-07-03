@@ -29,7 +29,7 @@ def load_graph(graph_path: str) -> nx.Graph:
 
 def format_standard(start_node: int, end_node: int, path: List[int]) -> Dict[str, str]:
     """Format data in standard variant."""
-    input_str = f"ST : {start_node} , {end_node}"
+    input_str = f"ST S : {start_node} , {end_node}"
     path_str = " , ".join(map(str, path))
     output_str = f"{path_str} : END"
     return {"input": input_str, "output": output_str}
@@ -41,7 +41,7 @@ def format_indices(start_node: int, end_node: int, path: List[int]) -> Dict[str,
     offset_end = end_node + 10000
     offset_path = [node + 10000 for node in path]
     
-    input_str = f"ST : {offset_start} , {offset_end}"
+    input_str = f"ST I : {offset_start} , {offset_end}"
     path_str = " , ".join(map(str, offset_path))
     output_str = f"{path_str} : END"
     return {"input": input_str, "output": output_str}
@@ -49,7 +49,7 @@ def format_indices(start_node: int, end_node: int, path: List[int]) -> Dict[str,
 
 def format_grammar(start_node: int, end_node: int, path: List[int]) -> Dict[str, str]:
     """Format data in grammar variant (consecutive node pairs)."""
-    input_str = f"ST : {start_node} , {end_node}"
+    input_str = f"ST G : {start_node} , {end_node}"
     
     # Create pairs of consecutive nodes in the path
     pairs = []
@@ -67,7 +67,7 @@ def format_grammar_indices(start_node: int, end_node: int, path: List[int]) -> D
     offset_end = end_node + 10000
     offset_path = [node + 10000 for node in path]
     
-    input_str = f"ST : {offset_start} , {offset_end}"
+    input_str = f"ST GI : {offset_start} , {offset_end}"
     
     # Create pairs of consecutive nodes in the path (with offset)
     pairs = []

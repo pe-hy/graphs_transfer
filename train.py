@@ -10,7 +10,7 @@ from config import hf_config
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, OmegaConf
 from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
-from utils.evaluator import Evaluator
+from utils.evaluator import Evaluator, DualEvaluator
 from litgpt.config import configs, Config, name_to_config
 from litgpt.model import GPT
 from litgpt.api import Preprocessor
@@ -21,7 +21,7 @@ import numpy as np
 import pickle
 import networkx as nx
 from transformers import get_cosine_schedule_with_warmup
-from typing import Optional
+from typing import Optional, List
 
 import logging
 
@@ -44,7 +44,7 @@ def load_graph(graph_path: str) -> nx.Graph:
 
 
 class LitLLM(L.LightningModule):
-    def __init__(self, cfg, model, preprocessor, train_batches, delimiter_token_id, graph, data_format, trainer_ckpt_path=None):
+    def __init__(self, cfg, model, preprocessor, train_batches, delimiter_token_id, graph, data_formats, trainer_ckpt_path=None):
         super().__init__()
 
         self.llm = model
@@ -54,7 +54,7 @@ class LitLLM(L.LightningModule):
         self.train_batches = train_batches
         self.delimiter_token_id = delimiter_token_id
         self.graph = graph
-        self.data_format = data_format
+        self.data_formats = data_formats  # List of formats for test sets
         _, self.hf_conf = hf_config.get_configs(cfg)
 
     def setup(self, stage):
@@ -123,60 +123,121 @@ class LitLLM(L.LightningModule):
         return {f"loss": loss}
     
     def on_validation_epoch_end(self):
-        test = self.trainer.datamodule.dataset["test"]
-
+        # Check if we have dual test sets
+        has_dual_test = (hasattr(self.trainer.datamodule, 'test_main_dataset') and 
+                        hasattr(self.trainer.datamodule, 'test_second_dataset'))
+        
         save_path = self.cfg.convert_hf.in_path
         self.llm.model.to(self.llm.preprocessor.device)
         self.llm.save(save_path)
-
         self.llm.model.to(self.device)
 
-        evaluator = Evaluator(
-            self.cfg,
-            test,
-            self.preprocessor.tokenizer,
-            self.cfg.data.split_str,
-            self.global_step,
-            self.llm.model,
-            self.graph,  # Pass the graph
-            self.data_format  # Pass the data format
-        )
-        
-        # Get metrics dictionary from evaluator
-        metrics = evaluator.evaluate()
-        
-        # Log all metrics to wandb/Lightning
-        for metric_name, value in metrics.items():
-            self.log(
-                f"Evaluation/{metric_name}",
-                value,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
+        if has_dual_test:
+            # Use dual evaluator for mixed training
+            test_main = self.trainer.datamodule.test_main_dataset
+            test_second = self.trainer.datamodule.test_second_dataset
+            
+            evaluator = DualEvaluator(
+                self.cfg,
+                [test_main, test_second],
+                self.data_formats,  # Should be [format1, format2]
+                self.preprocessor.tokenizer,
+                self.cfg.data.split_str,
+                self.global_step,
+                self.llm.model,
+                self.graph
             )
-        
-        if wandb.run is not None and hasattr(evaluator, 'predictions_after_delimiter'):
-            # Create example table
-            examples_table = wandb.Table(columns=["Prompt", "Prediction", "Ground Truth", "Exact Match", "Valid Path"])
             
-            # Select a few random indices to log
-            num_examples = min(self.cfg.wandb.num_examples_reported, len(evaluator.prompts))
-            indices = np.random.choice(len(evaluator.prompts), num_examples, replace=False)
+            # Get metrics dictionary from dual evaluator
+            metrics = evaluator.evaluate()
             
-            for i in indices:
-                prompt = self.preprocessor.tokenizer.decode(evaluator.prompts[i], skip_special_tokens=True)
-                pred = evaluator.predictions_after_delimiter[i]
-                gt = evaluator.gts[i]
-                exact_match = pred == gt
+            # Log all metrics to wandb/Lightning
+            for metric_name, value in metrics.items():
+                self.log(
+                    f"Evaluation/{metric_name}",
+                    value,
+                    on_epoch=True,
+                    prog_bar=True,
+                    sync_dist=True,
+                )
+            
+            # Log examples for both test sets to wandb
+            if wandb.run is not None:
+                for i, result in enumerate(evaluator.results):
+                    test_name = result['test_set_name']
+                    examples_table = wandb.Table(columns=["Prompt", "Prediction", "Ground Truth", "Exact Match", "Valid Path"])
+                    
+                    # Select a few random indices to log
+                    num_examples = min(self.cfg.wandb.num_examples_reported, len(result['prompts']))
+                    indices = np.random.choice(len(result['prompts']), num_examples, replace=False)
+                    
+                    for idx in indices:
+                        prompt = self.preprocessor.tokenizer.decode(result['prompts'][idx], skip_special_tokens=True)
+                        pred = result['predictions_after_delimiter'][idx]
+                        gt = result['gts'][idx]
+                        exact_match = pred == gt
+                        
+                        # Get path validity if available
+                        valid_path = False
+                        if result['path_validities'] and idx < len(result['path_validities']):
+                            valid_path = result['path_validities'][idx]
+                        
+                        examples_table.add_data(prompt, pred, gt, exact_match, valid_path)
+                    
+                    wandb.log({f"evaluation_examples_{test_name}": examples_table}, step=self.global_step)
+        else:
+            # Fallback to single test set evaluation
+            test = self.trainer.datamodule.dataset["test"]
+            
+            # Use the first format if available, otherwise default to "standard"
+            data_format = self.data_formats[0] if self.data_formats else "standard"
+            
+            evaluator = Evaluator(
+                self.cfg,
+                test,
+                self.preprocessor.tokenizer,
+                self.cfg.data.split_str,
+                self.global_step,
+                self.llm.model,
+                self.graph,
+                data_format
+            )
+            
+            # Get metrics dictionary from evaluator
+            metrics = evaluator.evaluate()
+            
+            # Log all metrics to wandb/Lightning
+            for metric_name, value in metrics.items():
+                self.log(
+                    f"Evaluation/{metric_name}",
+                    value,
+                    on_epoch=True,
+                    prog_bar=True,
+                    sync_dist=True,
+                )
+            
+            if wandb.run is not None and hasattr(evaluator, 'predictions_after_delimiter'):
+                # Create example table
+                examples_table = wandb.Table(columns=["Prompt", "Prediction", "Ground Truth", "Exact Match", "Valid Path"])
                 
-                # Get path validity if available
-                valid_path = False
-                if hasattr(evaluator, 'path_validities') and i < len(evaluator.path_validities):
-                    valid_path = evaluator.path_validities[i]
+                # Select a few random indices to log
+                num_examples = min(self.cfg.wandb.num_examples_reported, len(evaluator.prompts))
+                indices = np.random.choice(len(evaluator.prompts), num_examples, replace=False)
                 
-                examples_table.add_data(prompt, pred, gt, exact_match, valid_path)
-            
-            wandb.log({"evaluation_examples": examples_table}, step=self.global_step)
+                for i in indices:
+                    prompt = self.preprocessor.tokenizer.decode(evaluator.prompts[i], skip_special_tokens=True)
+                    pred = evaluator.predictions_after_delimiter[i]
+                    gt = evaluator.gts[i]
+                    exact_match = pred == gt
+                    
+                    # Get path validity if available
+                    valid_path = False
+                    if hasattr(evaluator, 'path_validities') and i < len(evaluator.path_validities):
+                        valid_path = evaluator.path_validities[i]
+                    
+                    examples_table.add_data(prompt, pred, gt, exact_match, valid_path)
+                
+                wandb.log({"evaluation_examples": examples_table}, step=self.global_step)
 
     def configure_optimizers(self):
 
@@ -259,10 +320,6 @@ def main(cfg: DictConfig):
     # Load the graph
     graph_path = cfg.data.get("graph_path", "data/graph.pkl")
     graph = load_graph(graph_path)
-    
-    # Get data format from config (should be "standard", "indices", or "grammar")
-    data_format = cfg.data.get("format", "standard")
-    print(f"Using data format: {data_format}")
 
     tokenizer = get_tokenizer(cfg)
     preprocessor = Preprocessor(
@@ -270,7 +327,31 @@ def main(cfg: DictConfig):
     )
     conf.padded_vocab_size = len(tokenizer.get_vocab())
     model = LLM(GPT(conf), preprocessor=preprocessor, config=conf)
-    datasets = get_data(cfg, tokenizer)
+
+    # Handle test files - check if we have dual test files from command line args
+    test_files = None
+    data_formats = ["standard"]  # Default
+    
+    # Check if running with mixed data (dual test files)
+    train_file_path = cfg.data.train_file
+    if "mixed_" in train_file_path:
+        # Extract formats from path like "data/256/mixed_standard_indices/train.json"
+        import re
+        match = re.search(r'mixed_([^_]+)_([^/]+)', train_file_path)
+        if match:
+            format1, format2 = match.groups()
+            data_formats = [format1, format2]
+            
+            # Construct test file paths
+            base_dir = os.path.dirname(train_file_path)
+            test_main_path = os.path.join(base_dir, "test_main.json")
+            test_second_path = os.path.join(base_dir, "test_second.json")
+            test_files = [test_main_path, test_second_path]
+            
+            print(f"Detected mixed training with formats: {format1} + {format2}")
+            print(f"Test files: {test_main_path}, {test_second_path}")
+
+    datasets = get_data(cfg, tokenizer, test_files=test_files)
     data = Datamodule(datasets, batch_size, num_workers, tokenizer)
     data.connect(max_seq_length=cfg.model.block_size)
     data.setup()
@@ -285,7 +366,7 @@ def main(cfg: DictConfig):
         preprocessor=preprocessor,
         delimiter_token_id=trace_start_token_id,
         graph=graph,
-        data_format=data_format
+        data_formats=data_formats
     )
 
     logger = WandbLogger(
