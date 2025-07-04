@@ -90,7 +90,7 @@ class PathParser:
                 return self._parse_indices_output(output_text)
             elif self.data_format == "grammar":
                 return self._parse_grammar_output(output_text)
-            elif self.data_format == "grammar_indices":
+            elif self.data_format == "grammarindices":
                 return self._parse_grammar_indices_output(output_text)
             else:
                 raise ValueError(f"Unknown data format: {self.data_format}")
@@ -117,7 +117,6 @@ class PathParser:
                     if numbers:
                         node = int(numbers[0])
                         path.append(node)
-            
             return path if path else None
         except:
             return None

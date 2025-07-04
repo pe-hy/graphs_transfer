@@ -23,16 +23,16 @@ SEED=42
 COMBINATIONS=(
     "standard indices"
     "standard grammar"
-    "standard grammar_indices"
+    "standard grammarindices"
     "indices standard"
     "indices grammar"
-    "indices grammar_indices"
+    "indices grammarindices"
     "grammar standard"
     "grammar indices"
-    "grammar grammar_indices"
-    "grammar_indices standard"
-    "grammar_indices indices"
-    "grammar_indices grammar"
+    "grammar grammarindices"
+    "grammarindices standard"
+    "grammarindices indices"
+    "grammarindices grammar"
 )
 
 echo "Starting mixed format data generation..."

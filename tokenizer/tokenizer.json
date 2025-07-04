@@ -4,7 +4,7 @@
   "padding": null,
   "added_tokens": [
     {
-      "id": 411,
+      "id": 410,
       "content": "[BOS]",
       "single_word": false,
       "lstrip": false,
@@ -13,7 +13,7 @@
       "special": true
     },
     {
-      "id": 412,
+      "id": 411,
       "content": "[PAD]",
       "single_word": false,
       "lstrip": false,
@@ -22,7 +22,7 @@
       "special": true
     },
     {
-      "id": 413,
+      "id": 412,
       "content": "[MASK]",
       "single_word": false,
       "lstrip": false,
@@ -31,7 +31,7 @@
       "special": true
     },
     {
-      "id": 415,
+      "id": 413,
       "content": "[UNK]",
       "single_word": false,
       "lstrip": false,
@@ -40,7 +40,7 @@
       "special": true
     },
     {
-      "id": 416,
+      "id": 414,
       "content": "[EOS]",
       "single_word": false,
       "lstrip": false,
@@ -464,10 +464,10 @@
       "157": 403,
       "139": 404,
       "177": 405,
-      "I": 407,
-      "G": 408,
-      "GI": 409,
-      "S": 410
+      "I": 406,
+      "G": 407,
+      "GI": 408,
+      "S": 409
     },
     "unk_token": "[UNK]"
   }

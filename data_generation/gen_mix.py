@@ -125,7 +125,7 @@ def generate_mixed_language_data(
         "standard": format_standard,
         "indices": format_indices,
         "grammar": format_grammar,
-        "grammar_indices": format_grammar_indices
+        "grammarindices": format_grammar_indices
     }
     
     if format1 not in formatters or format2 not in formatters:
@@ -244,10 +244,10 @@ def main():
     parser.add_argument("--graph_path", default="data/graph.pkl", 
                        help="Path to the graph pickle file")
     parser.add_argument("--format1", default="standard",
-                       choices=["standard", "indices", "grammar", "grammar_indices"],
+                       choices=["standard", "indices", "grammar", "grammarindices"],
                        help="First format")
     parser.add_argument("--format2", default="indices", 
-                       choices=["standard", "indices", "grammar", "grammar_indices"],
+                       choices=["standard", "indices", "grammar", "grammarindices"],
                        help="Second format")
     parser.add_argument("--train_format1", type=int, default=1000,
                        help="Number of format1 examples in training")
